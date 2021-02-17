@@ -1,0 +1,20 @@
+[package]
+name = "voronoi_fps"
+version = "0.1.0"
+authors = ["Luthaf <luthaf@luthaf.fr>"]
+edition = "2018"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[[bench]]
+name = "bench"
+harness = false
+
+[dependencies]
+ndarray = "0.14"
+soa_derive = "0.10"
+
+[dev-dependencies]
+ndarray-npy = "0.7"
+criterion = {version = "0.3", features = ["html_reports"]}
