@@ -22,6 +22,199 @@ pub struct VoronoiCell {
     radius2: f64,
 }
 
+/// Point farthest away from a the center of a cell
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+struct FarthestPoint {
+    pub distance2: f64,
+    pub index: usize,
+}
+
+/// allocation cache for `VoronoiDecomposer` when adding a new point
+#[derive(Debug)]
+struct WorkArrays {
+    /// Distance between the new point and the center of all cells
+    distance_to_new_point: Vec<f64>,
+    /// List of active cells that might need to change
+    active_cells: Vec<usize>,
+    /// New radius2 for all active cells. This needs to be thread local to
+    /// prevent data races on radius access in the loop below.
+    farthest_points: ThreadLocal<Vec<Cell<FarthestPoint>>>,
+}
+
+impl WorkArrays {
+    fn new() -> WorkArrays {
+        WorkArrays {
+            distance_to_new_point: Vec::new(),
+            active_cells: Vec::new(),
+            farthest_points: ThreadLocal::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.distance_to_new_point.clear();
+        self.active_cells.clear();
+        self.farthest_points = ThreadLocal::new();
+    }
+
+    fn reserve(&mut self, additional: usize) {
+        self.distance_to_new_point.reserve(additional);
+        self.active_cells.reserve(additional);
+    }
+}
+
+#[derive(Debug)]
+pub struct VoronoiDecomposer<'a> {
+    /// Input points
+    points: ArrayView2<'a, f64>,
+    /// Current list of cells
+    cells: VoronoiCellVec,
+    /// For each point, index of the cell in `cells` containing the point
+    cell_for_point: Vec<usize>,
+    /// Norm of the vectors
+    norms: Vec<f64>,
+    /// Shortest distance for each point to already selected points
+    haussdorf: Vec<f64>,
+    /// Cached allocations when adding new points
+    work: WorkArrays,
+}
+
+impl<'a> VoronoiDecomposer<'a> {
+    pub fn new(points: ArrayView2<'a, f64>, initial: usize) -> VoronoiDecomposer<'a> {
+        let norms = points.axis_iter(Axis(0)).map(|row| {
+            row.iter().map(|v| v*v).sum()
+        }).collect::<Array1<f64>>();
+        let center = points.slice(s![initial, ..]);
+        let haussdorf = &norms + norms[initial] - 2.0 * center.dot(&points.t());
+
+        let mut cells = VoronoiCellVec::new();
+        let (farthest, radius2) = find_max(haussdorf.iter());
+        cells.push(VoronoiCell {
+            center_idx: initial,
+            center: center.to_owned(),
+            farthest: farthest,
+            radius2: radius2,
+        });
+
+        VoronoiDecomposer {
+            points: points,
+            cells: cells,
+            // start with all points in the initial cell (cell 0)
+            cell_for_point: vec![0; points.nrows()],
+            norms: norms.to_vec(),
+            haussdorf: haussdorf.to_vec(),
+            work: WorkArrays::new(),
+        }
+    }
+
+    /// Allocate capacity for `additional` more cells/selected points
+    pub fn reserve(&mut self, additional: usize) {
+        self.cells.reserve(additional);
+        self.cell_for_point.reserve(additional);
+        self.work.reserve(additional);
+    }
+
+    /// Add a new selected point as the center of a Voronoï cell
+    pub fn add_point(&mut self, new_point: usize) {
+        let new_center = self.points.slice(s![new_point, ..]);
+        let new_cell_idx = self.cells.len();
+
+        self.work.clear();
+
+        // now we find the "active" Voronoi cells, i.e. those that might change
+        // due to the new selection. We must compute distance of the new point
+        // to all the previous FPS.
+        for (&center_idx, center) in soa_zip!(&self.cells, [center_idx, center]) {
+            let d2 = self.norms[new_point] + self.norms[center_idx] - 2.0 * new_center.dot(&center.view());
+            self.work.distance_to_new_point.push(d2);
+        }
+
+        for (cell_idx, &radius2) in self.cells.radius2.iter().enumerate() {
+            // triangle inequality (r > d / 2), squared
+            if 0.25 * self.work.distance_to_new_point[cell_idx] < radius2 {
+                self.work.active_cells.push(cell_idx);
+            }
+        }
+
+        // the new cell is always active
+        self.work.active_cells.push(new_cell_idx);
+        // ensure the cells are sorted to be able to use binary_search
+        self.work.active_cells.sort_unstable();
+
+        self.cells.push(VoronoiCell {
+            center: new_center.to_owned(),
+            center_idx: new_point,
+            radius2: 0.0, // this will be updated below,
+            farthest: new_point,
+        });
+
+        for &cell_idx in &self.work.active_cells {
+            self.cells.radius2[cell_idx] = 0.0;
+            self.cells.farthest[cell_idx] = self.cells.center_idx[cell_idx];
+        }
+
+        let points = &self.points;
+        let norms = &self.norms;
+        let work = &mut self.work;
+        let n_active_cells = work.active_cells.len();
+
+        // update the voronoï decomposition with the new cell
+        self.cell_for_point.par_iter_mut()
+            .zip_eq(&mut self.haussdorf)
+            .enumerate()
+            // process 1000 points at the time to reduce threading overhead
+            .chunks(1000)
+            .for_each(|chunk| {
+                for (j, (cell_idx, haussdorf)) in chunk {
+                    let active_cells_idx = work.active_cells.binary_search(cell_idx);
+
+                    if let Ok(mut active_cells_idx) = active_cells_idx {
+                        // Check if we can skip this check for point j. This is a
+                        // tighter bound on the distance, since ||x_j - x_new|| <
+                        // new_radius
+                        if 0.25 * work.distance_to_new_point[*cell_idx] < *haussdorf {
+                            let d2_j = norms[new_point] + norms[j] - 2.0 * new_center.dot(&points.slice(s![j, ..]));
+                            if d2_j < *haussdorf {
+                                // We have to reassign point j to the new cell.
+                                *haussdorf = d2_j;
+                                *cell_idx = new_cell_idx;
+                                active_cells_idx = n_active_cells - 1;
+                            }
+                        }
+
+                        let farthest = work.farthest_points.get_or(|| {
+                            vec![Cell::new(Default::default()); n_active_cells]
+                        });
+
+                        // also update the voronoi radius/farthest point for the cell
+                        // containing the current point
+                        if *haussdorf > farthest[active_cells_idx].get().distance2 {
+                            farthest[active_cells_idx].set(FarthestPoint {
+                                distance2: *haussdorf,
+                                index: j,
+                            });
+                        }
+                    }
+                }
+            });
+
+        // merge the thread locals and update everything
+        for farthests in work.farthest_points.iter_mut() {
+            for (farthest, &cell_idx) in farthests.iter().zip(&work.active_cells) {
+                let farthest = farthest.get();
+                if farthest.distance2 > self.cells.radius2[cell_idx] {
+                   self.cells.radius2[cell_idx] = farthest.distance2;
+                   self.cells.farthest[cell_idx] = farthest.index;
+                }
+            }
+        }
+    }
+
+    /// Access the current list of cells
+    pub fn cells(&self) -> VoronoiCellSlice {
+        self.cells.as_slice()
+    }
+}
+
 /// Get both the maximal value in `values` and the position of this maximal
 /// value
 fn find_max<'a, I: Iterator<Item=&'a f64>>(values: I) -> (usize, f64) {
@@ -30,17 +223,6 @@ fn find_max<'a, I: Iterator<Item=&'a f64>>(values: I) -> (usize, f64) {
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).expect("got NaN value"))
         .map(|(index, value)| (index, *value))
         .expect("got an empty slice")
-}
-
-#[allow(clippy::missing_safety_doc)]
-#[no_mangle]
-pub unsafe extern fn select_fps_voronoi(ptr: *const f64, ncols: usize, nrows: usize, n_select: usize, initial: usize, output: *mut usize) {
-    let slice = std::slice::from_raw_parts(ptr, ncols * nrows);
-    let array = ArrayView::from(slice).into_shape((ncols, nrows)).unwrap();
-
-    let results = select_fps(array, n_select, initial);
-    let output = std::slice::from_raw_parts_mut(output, n_select);
-    output.copy_from_slice(&results);
 }
 
 /// Select `n_select` points from `points` using Farthest Points Sampling, and
@@ -53,132 +235,36 @@ pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) 
         panic!("can not select more points than what we have")
     }
 
-    let center = points.slice(s![initial, ..]);
+    let mut voronoi = VoronoiDecomposer::new(points, initial);
+    voronoi.reserve(n_select - 1);
 
-    let norms = points.axis_iter(Axis(0)).map(|row| {
-        row.iter().map(|v| v*v).sum()
-    }).collect::<Array1<f64>>();
-    let norm_first = norms[initial];
-
-    // Haussdorf distance of all points to the selected points
-    let haussdorf = &norms + norm_first - 2.0 * center.dot(&points.t());
-    let mut haussdorf = haussdorf.to_vec();
-
-    // List of already selected Voronoï cells
-    let mut cells = VoronoiCellVec::with_capacity(n_select);
-    let (farthest, radius2) = find_max(haussdorf.iter());
-    cells.push(VoronoiCell {
-        center_idx: initial,
-        center: center.to_owned(),
-        farthest: farthest,
-        radius2: radius2,
-    });
-
-    // Assign points to cell, start with everyone in the initial cell (cell 0)
-    let mut cell_for_point = vec![0; points.nrows()];
-
-    let mut distance2_to_new_point = Vec::with_capacity(n_select);
-    for i in 1..n_select {
-        distance2_to_new_point.clear();
-
+    for _ in 1..n_select {
         // Find the maximum minimum (maxmin) distance and the corresponding
         // point. The maxmin point must be one of the farthest points from the
         // Voronoï decomposition, so we only have to look at the list of
         // existing cells to find it.
-
-        let (max_radius_cell, _) = find_max(cells.radius2.iter());
-        let new_idx = cells.farthest[max_radius_cell];
-        let new_center = points.slice(s![new_idx, ..]);
-
-        // now we find the "active" Voronoi cells, i.e. those that might change
-        // due to the new selection.
-        let mut active_cells = Vec::new();
-
-        // we must compute distance of the new point to all the previous FPS.
-        for (&center_idx, center) in soa_zip!(&cells, [center_idx, center]) {
-            let d2 = norms[new_idx] + norms[center_idx] - 2.0 * new_center.dot(&center.view());
-            distance2_to_new_point.push(d2);
-        }
-
-        for (cell_idx, &radius2) in cells.radius2.iter().enumerate() {
-            // triangle inequality (r > d / 2), squared
-            if 0.25 * distance2_to_new_point[cell_idx] < radius2 {
-                active_cells.push(cell_idx);
-            }
-        }
-        // the new cell is always active
-        active_cells.push(i);
-        // ensure the cells are sorted to be able to use binary_search
-        active_cells.sort_unstable();
-
-        cells.push(VoronoiCell {
-            center: new_center.to_owned(),
-            center_idx: new_idx,
-            radius2: 0.0, // this will be updated below,
-            farthest: new_idx,
-        });
-
-        for &cell_idx in &active_cells {
-            cells.radius2[cell_idx] = 0.0;
-            cells.farthest[cell_idx] = cells.center_idx[cell_idx];
-        }
-
-        // thread local vector of the same size as `active_cells`. These need
-        // to be thread local to prevent data races on radius access in the
-        // loop below.
-        let new_radius2: ThreadLocal<Vec<Cell<f64>>> = ThreadLocal::new();
-        let new_farthest: ThreadLocal<Vec<Cell<usize>>> = ThreadLocal::new();
-
-        // update the voronoï decomposition with the new cell
-        cell_for_point.par_iter_mut()
-            .zip_eq(&mut haussdorf)
-            .enumerate()
-            // process 1000 points at the time to reduce threading overhead
-            .chunks(1000)
-            .for_each(|chunk| {
-                for (j, (cell_idx, haussdorf)) in chunk {
-                    let active_cells_idx = active_cells.binary_search(cell_idx);
-
-                    if let Ok(mut active_cells_idx) = active_cells_idx {
-                        // Check if we can skip this check for point j. This is a
-                        // tighter bound on the distance, since ||x_j - x_new|| <
-                        // new_radius
-                        if 0.25 * distance2_to_new_point[*cell_idx] < *haussdorf {
-                            let d2_j = norms[new_idx] + norms[j] - 2.0 * new_center.dot(&points.slice(s![j, ..]));
-                            if d2_j < *haussdorf {
-                                // We have to reassign point j to the new cell.
-                                *haussdorf = d2_j;
-                                *cell_idx = i;
-                                active_cells_idx = active_cells.len() - 1;
-                            }
-                        }
-
-                        let radius2 = new_radius2.get_or(|| vec![Cell::new(0.0); active_cells.len()]);
-                        let farthest = new_farthest.get_or(|| vec![Cell::new(0); active_cells.len()]);
-
-                        // also update the voronoi radius/farthest point for the cell
-                        // containing the current point
-                        if *haussdorf > radius2[active_cells_idx].get() {
-                            radius2[active_cells_idx].set(*haussdorf);
-                            farthest[active_cells_idx].set(j);
-                        }
-                    }
-                }
-            });
-
-        // merge the thread locals and update everything
-        for (radii2, farthest_points) in new_radius2.into_iter().zip(new_farthest.into_iter()) {
-            for ((radius2, farthest), &cell_idx) in radii2.into_iter().zip(farthest_points.into_iter()).zip(&active_cells) {
-                let radius2 = radius2.get();
-                if radius2 > cells.radius2[cell_idx] {
-                    cells.radius2[cell_idx] = radius2;
-                    cells.farthest[cell_idx] = farthest.get();
-                }
-            }
-        }
+        let new_point = {
+            let cells = voronoi.cells();
+            let (max_radius_cell, _) = find_max(cells.radius2.iter());
+            cells.farthest[max_radius_cell]
+        };
+        voronoi.add_point(new_point);
     }
 
-    return cells.center_idx;
+    return voronoi.cells().center_idx.to_owned();
+}
+
+
+/// Export the function to C
+#[allow(clippy::missing_safety_doc)]
+#[no_mangle]
+pub unsafe extern fn select_fps_voronoi(ptr: *const f64, ncols: usize, nrows: usize, n_select: usize, initial: usize, output: *mut usize) {
+    let slice = std::slice::from_raw_parts(ptr, ncols * nrows);
+    let array = ArrayView::from(slice).into_shape((ncols, nrows)).unwrap();
+
+    let results = select_fps(array, n_select, initial);
+    let output = std::slice::from_raw_parts_mut(output, n_select);
+    output.copy_from_slice(&results);
 }
 
 #[cfg(test)]
