@@ -12,8 +12,10 @@ name = "bench"
 harness = false
 
 [dependencies]
-ndarray = "0.14"
+ndarray = {version = "0.14", features = ["rayon"]}
 soa_derive = "0.10"
+rayon = "1"
+thread_local = "1"
 
 [dev-dependencies]
 ndarray-npy = "0.7"

@@ -1,7 +1,11 @@
 #![allow(clippy::needless_return, clippy::redundant_field_names)]
 
-use soa_derive::{StructOfArray, soa_zip};
+use std::cell::Cell;
 
+use rayon::prelude::*;
+use thread_local::ThreadLocal;
+
+use soa_derive::{StructOfArray, soa_zip};
 use ndarray::{ArrayView, Array1, ArrayView2, Axis, s};
 
 /// Single Voronoï cell
@@ -57,7 +61,8 @@ pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) 
     let norm_first = norms[initial];
 
     // Haussdorf distance of all points to the selected points
-    let mut haussdorf = &norms + norm_first - 2.0 * center.dot(&points.t());
+    let haussdorf = &norms + norm_first - 2.0 * center.dot(&points.t());
+    let mut haussdorf = haussdorf.to_vec();
 
     // List of already selected Voronoï cells
     let mut cells = VoronoiCellVec::with_capacity(n_select);
@@ -81,15 +86,9 @@ pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) 
         // Voronoï decomposition, so we only have to look at the list of
         // existing cells to find it.
 
-        let (cell, _) = find_max(cells.radius2.iter());
-        let new_idx = cells.farthest[cell];
-
-        let new_cell = VoronoiCell {
-            center: points.slice(s![new_idx, ..]).to_owned(),
-            center_idx: new_idx,
-            radius2: 0.0, // this will be updated below,
-            farthest: new_idx,
-        };
+        let (max_radius_cell, _) = find_max(cells.radius2.iter());
+        let new_idx = cells.farthest[max_radius_cell];
+        let new_center = points.slice(s![new_idx, ..]);
 
         // now we find the "active" Voronoi cells, i.e. those that might change
         // due to the new selection.
@@ -97,7 +96,7 @@ pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) 
 
         // we must compute distance of the new point to all the previous FPS.
         for (&center_idx, center) in soa_zip!(&cells, [center_idx, center]) {
-            let d2 = norms[new_idx] + norms[center_idx] - 2.0 * new_cell.center.dot(&center.view());
+            let d2 = norms[new_idx] + norms[center_idx] - 2.0 * new_center.dot(&center.view());
             distance2_to_new_point.push(d2);
         }
 
@@ -107,39 +106,73 @@ pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) 
                 active_cells.push(cell_idx);
             }
         }
+        // the new cell is always active
+        active_cells.push(i);
+        // ensure the cells are sorted to be able to use binary_search
+        active_cells.sort_unstable();
+
+        cells.push(VoronoiCell {
+            center: new_center.to_owned(),
+            center_idx: new_idx,
+            radius2: 0.0, // this will be updated below,
+            farthest: new_idx,
+        });
 
         for &cell_idx in &active_cells {
             cells.radius2[cell_idx] = 0.0;
             cells.farthest[cell_idx] = cells.center_idx[cell_idx];
         }
 
-        cells.push(new_cell);
+        // thread local vector of the same size as `active_cells`. These need
+        // to be thread local to prevent data races on radius access in the
+        // loop below.
+        let new_radius2: ThreadLocal<Vec<Cell<f64>>> = ThreadLocal::new();
+        let new_farthest: ThreadLocal<Vec<Cell<usize>>> = ThreadLocal::new();
 
         // update the voronoï decomposition with the new cell
-        for j in 0..n_points {
-            let mut cell_idx = cell_for_point[j];
+        cell_for_point.par_iter_mut()
+            .zip_eq(&mut haussdorf)
+            .enumerate()
+            // process 1000 points at the time to reduce threading overhead
+            .chunks(1000)
+            .for_each(|chunk| {
+                for (j, (cell_idx, haussdorf)) in chunk {
+                    let active_cells_idx = active_cells.binary_search(cell_idx);
 
-            if active_cells.contains(&cell_idx) {
-                // Check if we can skip this check for point j. This is a
-                // tighter bound on the distance, since ||x_j - x_new|| <
-                // new_radius
-                if 0.25 * distance2_to_new_point[cell_idx] < haussdorf[j] {
-                    let d2_j = norms[new_idx] + norms[j] - 2.0 * cells.center[i].dot(&points.slice(s![j, ..]));
+                    if let Ok(mut active_cells_idx) = active_cells_idx {
+                        // Check if we can skip this check for point j. This is a
+                        // tighter bound on the distance, since ||x_j - x_new|| <
+                        // new_radius
+                        if 0.25 * distance2_to_new_point[*cell_idx] < *haussdorf {
+                            let d2_j = norms[new_idx] + norms[j] - 2.0 * new_center.dot(&points.slice(s![j, ..]));
+                            if d2_j < *haussdorf {
+                                // We have to reassign point j to the new cell.
+                                *haussdorf = d2_j;
+                                *cell_idx = i;
+                                active_cells_idx = active_cells.len() - 1;
+                            }
+                        }
 
-                    if d2_j < haussdorf[j] {
-                        // We have to reassign point j to the new cell.
-                        haussdorf[j] = d2_j;
+                        let radius2 = new_radius2.get_or(|| vec![Cell::new(0.0); active_cells.len()]);
+                        let farthest = new_farthest.get_or(|| vec![Cell::new(0); active_cells.len()]);
 
-                        cell_idx = i;
-                        cell_for_point[j] = cell_idx;
+                        // also update the voronoi radius/farthest point for the cell
+                        // containing the current point
+                        if *haussdorf > radius2[active_cells_idx].get() {
+                            radius2[active_cells_idx].set(*haussdorf);
+                            farthest[active_cells_idx].set(j);
+                        }
                     }
                 }
+            });
 
-                // also update the voronoi radius/farthest point for the cell
-                // containing the current point
-                if haussdorf[j] > cells.radius2[cell_idx] {
-                    cells.radius2[cell_idx] = haussdorf[j];
-                    cells.farthest[cell_idx] = j;
+        // merge the thread locals and update everything
+        for (radii2, farthest_points) in new_radius2.into_iter().zip(new_farthest.into_iter()) {
+            for ((radius2, farthest), &cell_idx) in radii2.into_iter().zip(farthest_points.into_iter()).zip(&active_cells) {
+                let radius2 = radius2.get();
+                if radius2 > cells.radius2[cell_idx] {
+                    cells.radius2[cell_idx] = radius2;
+                    cells.farthest[cell_idx] = farthest.get();
                 }
             }
         }
@@ -158,8 +191,7 @@ mod test {
     use std::path::PathBuf;
 
     #[test]
-    fn check() {
-
+    fn check_simple() {
         let data = Array2::from_shape_vec((4, 2), vec![
             0.0, 1.0,
             0.8, 0.5,
@@ -175,7 +207,7 @@ mod test {
     }
 
     #[test]
-    fn check_on_boston() {
+    fn check_boston() {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("boston.npy");
         let data: Array2<f64> = read_npy(path).unwrap();
