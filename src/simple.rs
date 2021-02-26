@@ -1,6 +1,18 @@
-use ndarray::{Array1, ArrayView2, Axis, s};
+use ndarray::{Array1, ArrayView1, ArrayView2, ArrayViewMut1, Axis, par_azip, s};
 
 use super::find_max;
+
+fn compute_haussdorf(
+    points: ArrayView2<'_, f64>,
+    norms: ArrayView1<'_, f64>,
+    current: usize,
+    output: ArrayViewMut1<f64>
+) {
+    let point = points.slice(s![current, ..]);
+    par_azip!((o in output, norm in norms, other in points.axis_iter(Axis(0))) {
+        *o = norm + norms[current] - 2.0 * point.dot(&other);
+    })
+}
 
 /// Select `n_select` points from `points` using Farthest Points Sampling, and
 /// return the indexes of selected points. The first point (already selected) is
@@ -20,15 +32,15 @@ pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) 
     let mut fps_indexes = Vec::with_capacity(n_select);
     fps_indexes.push(initial);
 
-    let first_point = points.slice(s![initial, ..]);
-    let mut haussdorf = &norms + norms[initial] - 2.0 * first_point.dot(&points.t());
+    let mut haussdorf = Array1::from_elem([n_points], 0.0);
+    compute_haussdorf(points, norms.view(), initial, haussdorf.view_mut());
+    let mut new_distances = Array1::from_elem([n_points], 0.0);
 
     for _ in 1..n_select {
         let (new, _) = find_max(haussdorf.iter());
         fps_indexes.push(new);
 
-        let new_point = points.slice(s![new, ..]);
-        let new_distances = &norms + norms[new] - 2.0 * new_point.dot(&points.t());
+        compute_haussdorf(points, norms.view(), new, new_distances.view_mut());
 
         for (d, &new_d) in haussdorf.iter_mut().zip(&new_distances) {
             if new_d < *d {
