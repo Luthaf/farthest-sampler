@@ -7,7 +7,7 @@ use ndarray::ArrayView;
 
 use once_cell::sync::Lazy;
 
-use tracing_span_time::{SpanGraph, SpanTimeLayer};
+use tracing_timing_graph::{SpanGraph, SpanTimingLayer};
 use tracing_subscriber::{prelude::*, registry::Registry};
 
 use super::select_fps;
@@ -23,7 +23,7 @@ pub unsafe extern fn select_fps_voronoi(ptr: *const f64, ncols: usize, nrows: us
 }
 
 static TIMER_GRAPH: Lazy<Arc<Mutex<SpanGraph>>> = Lazy::new(|| {
-    let span_timer = SpanTimeLayer::new();
+    let span_timer = SpanTimingLayer::new();
     let graph = span_timer.graph();
     let subscriber = Registry::default().with(span_timer);
     tracing::subscriber::set_global_default(subscriber).unwrap();
