@@ -13,9 +13,9 @@ pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) 
         panic!("can not select more points than what we have")
     }
 
-    let norms = points.axis_iter(Axis(0)).map(|row| {
-        row.iter().map(|v| v*v).sum()
-    }).collect::<Array1<f64>>();
+    let norms = points.axis_iter(Axis(0))
+        .map(|row| row.dot(&row))
+        .collect::<Array1<f64>>();
 
     let mut fps_indexes = Vec::with_capacity(n_select);
     fps_indexes.push(initial);

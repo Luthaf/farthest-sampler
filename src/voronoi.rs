@@ -81,9 +81,9 @@ pub struct VoronoiDecomposer<'a> {
 impl<'a> VoronoiDecomposer<'a> {
     #[tracing::instrument(name = "initialize voronoi")]
     pub fn new(points: ArrayView2<'a, f64>, initial: usize) -> VoronoiDecomposer<'a> {
-        let norms = points.axis_iter(Axis(0)).map(|row| {
-            row.iter().map(|v| v*v).sum()
-        }).collect::<Array1<f64>>();
+        let norms = points.axis_iter(Axis(0))
+            .map(|row| row.dot(&row))
+            .collect::<Array1<f64>>();
         let center = points.slice(s![initial, ..]);
         let haussdorf = &norms + norms[initial] - 2.0 * center.dot(&points.t());
 
