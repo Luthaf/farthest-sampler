@@ -1,9 +1,12 @@
+#![allow(clippy::needless_return)]
+
 use clap::{Arg, App};
 
 use ndarray::{Array1, Array2};
 use ndarray_npy::{read_npy, write_npy};
 
-use voronoi_fps::VoronoiDecomposer;
+use voronoi_fps::voronoi::VoronoiDecomposer;
+use voronoi_fps::find_max;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = App::new("select-structures")
@@ -104,15 +107,4 @@ environment in this structure is selected."
     write_npy(matches.value_of("output-radius").unwrap(), &radius_when_selected)?;
 
     return Ok(());
-}
-
-
-/// Get both the maximal value in `values` and the position of this maximal
-/// value
-fn find_max<'a, I: Iterator<Item=&'a f64>>(values: I) -> (usize, f64) {
-    values
-        .enumerate()
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).expect("got NaN value"))
-        .map(|(index, value)| (index, *value))
-        .expect("got an empty slice")
 }

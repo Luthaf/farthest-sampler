@@ -10,14 +10,22 @@ use once_cell::sync::Lazy;
 use tracing_timing_graph::{SpanGraph, SpanTimingLayer};
 use tracing_subscriber::{prelude::*, registry::Registry};
 
-use super::select_fps;
-
 #[no_mangle]
 pub unsafe extern fn select_fps_voronoi(ptr: *const f64, ncols: usize, nrows: usize, n_select: usize, initial: usize, output: *mut usize) {
     let slice = std::slice::from_raw_parts(ptr, ncols * nrows);
     let array = ArrayView::from(slice).into_shape((ncols, nrows)).unwrap();
 
-    let results = select_fps(array, n_select, initial);
+    let results = crate::voronoi::select_fps(array, n_select, initial);
+    let output = std::slice::from_raw_parts_mut(output, n_select);
+    output.copy_from_slice(&results);
+}
+
+#[no_mangle]
+pub unsafe extern fn select_fps_simple(ptr: *const f64, ncols: usize, nrows: usize, n_select: usize, initial: usize, output: *mut usize) {
+    let slice = std::slice::from_raw_parts(ptr, ncols * nrows);
+    let array = ArrayView::from(slice).into_shape((ncols, nrows)).unwrap();
+
+    let results = crate::simple::select_fps(array, n_select, initial);
     let output = std::slice::from_raw_parts_mut(output, n_select);
     output.copy_from_slice(&results);
 }
