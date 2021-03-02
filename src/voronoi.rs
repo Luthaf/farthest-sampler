@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::HashSet;
 
 use rayon::prelude::*;
 use thread_local::ThreadLocal;
@@ -20,13 +21,15 @@ pub struct VoronoiCell {
     farthest: usize,
     /// Distance (squared) to the farthest point from the center in this cell
     radius2: f64,
+    /// Indexes of the points in this cell
+    points: Vec<usize>,
 }
 
 /// Point farthest away from a the center of a cell
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default)]
 struct FarthestPoint {
-    pub distance2: f64,
-    pub index: usize,
+    pub distance2: Cell<f64>,
+    pub index: Cell<usize>,
 }
 
 /// allocation cache for `VoronoiDecomposer` when adding a new point
@@ -35,25 +38,20 @@ struct WorkArrays {
     /// Distance between the new point and the center of all cells
     distance_to_new_point: Vec<f64>,
     /// List of active cells that might need to change
-    active_cells: Vec<usize>,
-    /// New radius2 for all active cells. This needs to be thread local to
-    /// prevent data races on radius access in the loop below.
-    farthest_points: ThreadLocal<Vec<Cell<FarthestPoint>>>,
+    active_cells: HashSet<usize>,
 }
 
 impl WorkArrays {
     fn new() -> WorkArrays {
         WorkArrays {
             distance_to_new_point: Vec::new(),
-            active_cells: Vec::new(),
-            farthest_points: ThreadLocal::new(),
+            active_cells: HashSet::new(),
         }
     }
 
     fn clear(&mut self) {
         self.distance_to_new_point.clear();
         self.active_cells.clear();
-        self.farthest_points = ThreadLocal::new();
     }
 
     fn reserve(&mut self, additional: usize) {
@@ -68,9 +66,7 @@ pub struct VoronoiDecomposer<'a> {
     points: ArrayView2<'a, f64>,
     /// Current list of cells
     cells: VoronoiCellVec,
-    /// For each point, index of the cell in `cells` containing the point
-    cell_for_point: Vec<usize>,
-    /// Norm of the vectors
+    /// Norm of the vector from origin for each points
     norms: Vec<f64>,
     /// Shortest distance for each point to already selected points
     haussdorf: Vec<f64>,
@@ -94,13 +90,12 @@ impl<'a> VoronoiDecomposer<'a> {
             center: center.to_owned(),
             farthest: farthest,
             radius2: radius2,
+            points: (0..points.shape()[0]).collect()
         });
 
         VoronoiDecomposer {
             points: points,
             cells: cells,
-            // start with all points in the initial cell (cell 0)
-            cell_for_point: vec![0; points.nrows()],
             norms: norms.to_vec(),
             haussdorf: haussdorf.to_vec(),
             work: WorkArrays::new(),
@@ -110,18 +105,15 @@ impl<'a> VoronoiDecomposer<'a> {
     /// Allocate capacity for `additional` more cells/selected points
     pub fn reserve(&mut self, additional: usize) {
         self.cells.reserve(additional);
-        self.cell_for_point.reserve(additional);
         self.work.reserve(additional);
     }
 
     /// Add a new selected point as the center of a Voronoï cell
     #[tracing::instrument(name = "add new voronoi cell")]
     pub fn add_point(&mut self, new_point: usize) {
-        let new_center = self.points.slice(s![new_point, ..]);
-        let new_cell_idx = self.cells.len();
-
         self.work.clear();
 
+        let new_center = self.points.slice(s![new_point, ..]);
         tracing_span!("find active cells", {
             // now we find the "active" Voronoi cells, i.e. those that might change
             // due to the new selection. We must compute distance of the new point
@@ -134,21 +126,9 @@ impl<'a> VoronoiDecomposer<'a> {
             for (cell_idx, &radius2) in self.cells.radius2.iter().enumerate() {
                 // triangle inequality (r > d / 2), squared
                 if 0.25 * self.work.distance_to_new_point[cell_idx] < radius2 {
-                    self.work.active_cells.push(cell_idx);
+                    self.work.active_cells.insert(cell_idx);
                 }
             }
-
-            // the new cell is always active
-            self.work.active_cells.push(new_cell_idx);
-            // ensure the cells are sorted to be able to use binary_search
-            self.work.active_cells.sort_unstable();
-
-            self.cells.push(VoronoiCell {
-                center: new_center.to_owned(),
-                center_idx: new_point,
-                radius2: 0.0, // this will be updated below,
-                farthest: new_point,
-            });
 
             for &cell_idx in &self.work.active_cells {
                 self.cells.radius2[cell_idx] = 0.0;
@@ -156,64 +136,98 @@ impl<'a> VoronoiDecomposer<'a> {
             }
         });
 
+        let mut new_cell = VoronoiCell {
+            center: new_center.to_owned(),
+            center_idx: new_point,
+            // these will be updated below,
+            radius2: 0.0,
+            farthest: new_point,
+            points: Vec::new(),
+        };
+
+        // use a channel to communicate the points that need to be added to the
+        // new cell.
+        let (new_cell_points_sender, new_cell_points_receiver) = std::sync::mpsc::channel();
+        let new_farthest_point = ThreadLocal::new();
+
         let points = &self.points;
         let norms = &self.norms;
-        let work = &mut self.work;
-        let n_active_cells = work.active_cells.len();
+        let work = &self.work;
+        let all_haussdorf = &self.haussdorf;
 
         tracing_span!("update decomposition", {
-            // update the voronoï decomposition with the new cell
-            self.cell_for_point.par_iter_mut()
-            .zip_eq(&mut self.haussdorf)
-            .enumerate()
-            .map(|(j, (cell_idx, haussdorf))| (j, cell_idx, haussdorf))
-            // process 1000 points at the time to reduce threading overhead
-            .chunks(1000)
-            .for_each(|chunk| {
-                for (j, cell_idx, haussdorf) in chunk {
-                    let active_cells_idx = work.active_cells.binary_search(cell_idx);
+            self.cells.points
+                .par_iter_mut()
+                .zip_eq(&mut self.cells.radius2)
+                .zip_eq(&mut self.cells.farthest)
+                .enumerate()
+                .filter_map(|(cell_idx, ((points_idx, radius2), farthest))| {
+                    if work.active_cells.contains(&cell_idx) {
+                        Some((cell_idx, points_idx, radius2, farthest))
+                    } else {
+                        None
+                    }
+                })
+                .for_each_with(new_cell_points_sender, |sender, (cell_idx, points_idx, radius2, farthest)| {
+                    let mut cell_updated_points = Vec::new();
+                    // farthest point found on this thread
+                    let farthest_point = new_farthest_point.get_or(FarthestPoint::default);
 
-                    if let Ok(mut active_cells_idx) = active_cells_idx {
-                        // Check if we can skip this check for point j. This is a
+                    for &point in &*points_idx {
+                        let haussdorf = all_haussdorf[point];
+
+                        // Check if we can skip this check for this point. This is a
                         // tighter bound on the distance, since ||x_j - x_new|| <
                         // new_radius
-                        if 0.25 * work.distance_to_new_point[*cell_idx] < *haussdorf {
-                            let d2_j = norms[new_point] + norms[j] - 2.0 * new_center.dot(&points.slice(s![j, ..]));
-                            if d2_j < *haussdorf {
-                                // We have to reassign point j to the new cell.
-                                *haussdorf = d2_j;
-                                *cell_idx = new_cell_idx;
-                                active_cells_idx = n_active_cells - 1;
+                        if 0.25 * work.distance_to_new_point[cell_idx] < haussdorf {
+                            let d2 = norms[new_point] + norms[point] - 2.0 * new_center.dot(&points.slice(s![point, ..]));
+                            if haussdorf > d2 {
+                                // We assign this point to the new cell
+                                sender.send((point, d2)).expect("failed to send new point");
+
+                                if d2 > farthest_point.distance2.get() {
+                                    farthest_point.distance2.set(d2);
+                                    farthest_point.index.set(point);
+                                }
+
+                                continue;
                             }
                         }
 
-                        let farthest = work.farthest_points.get_or(|| {
-                            vec![Cell::new(Default::default()); n_active_cells]
-                        });
-
-                        // also update the voronoi radius/farthest point for the cell
-                        // containing the current point
-                        if *haussdorf > farthest[active_cells_idx].get().distance2 {
-                            farthest[active_cells_idx].set(FarthestPoint {
-                                distance2: *haussdorf,
-                                index: j,
-                            });
+                        // the point is still in the same cell, make sure to
+                        // update the cell radius/farthest point if needed
+                        cell_updated_points.push(point);
+                        if haussdorf > *radius2 {
+                            *radius2 = haussdorf;
+                            *farthest = point;
                         }
                     }
-                }
-            });
 
-            // merge the thread locals and update everything
-            for farthests in work.farthest_points.iter_mut() {
-                for (farthest, &cell_idx) in farthests.iter().zip(&work.active_cells) {
-                    let farthest = farthest.get();
-                    if farthest.distance2 > self.cells.radius2[cell_idx] {
-                        self.cells.radius2[cell_idx] = farthest.distance2;
-                        self.cells.farthest[cell_idx] = farthest.index;
-                    }
+                    std::mem::swap(points_idx, &mut cell_updated_points);
+                });
+
+                for (point, haussdorf) in new_cell_points_receiver.iter() {
+                    new_cell.points.push(point);
+                    self.haussdorf[point] = haussdorf;
                 }
-            }
         });
+
+        for farthest in new_farthest_point.into_iter() {
+            if farthest.distance2.get() > new_cell.radius2 {
+                new_cell.radius2 = farthest.distance2.get();
+                new_cell.farthest = farthest.index.get();
+            }
+        }
+
+        self.cells.push(new_cell);
+
+        // sanity check that all points are in the right place
+        for cell in &self.cells {
+            debug_assert!(!cell.points.is_empty());
+            if cell.points.len() == 1 {
+                debug_assert_eq!(cell.points[0], *cell.center_idx);
+            }
+        }
     }
 
     /// Access the current list of cells
