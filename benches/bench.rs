@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use ndarray::Array2;
 use ndarray_npy::read_npy;
 
-use voronoi_fps::select_fps;
+use voronoi_fps::voronoi::select_fps;
 
 fn voronoi_fps_boston(c: &mut Criterion) {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
