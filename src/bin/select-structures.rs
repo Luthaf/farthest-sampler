@@ -2,7 +2,7 @@
 
 use clap::{Arg, App};
 
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, concatenate, Axis};
 use ndarray_npy::{read_npy, write_npy};
 
 use voronoi_fps::voronoi::VoronoiDecomposer;
@@ -41,24 +41,44 @@ environment in this structure is selected."
             .help("where to output Voronoi radii of selected points")
             .takes_value(true)
             .required(true))
+        .arg(Arg::with_name("selected")
+            .long("already-selected")
+            .value_name("selected.npy")
+            .help("set of points already selected")
+            .takes_value(true)
+            .required(true))
         .arg(Arg::with_name("points")
             .long("points")
             .value_name("points.npy")
-            .help("Sets the input file to use")
+            .help("points to select")
             .takes_value(true)
             .required(true))
         .get_matches();
 
     let points: Array2<f64> = read_npy(matches.value_of("points").unwrap())?;
-    let structures: Array1<u32> = read_npy(matches.value_of("structures").unwrap())?;
+    let selected: Array2<f64> = read_npy(matches.value_of("selected").unwrap())?;
+    let structures: Array1<i32> = read_npy(matches.value_of("structures").unwrap())?;
     let n_select: usize = matches.value_of("n_structures").unwrap().parse()?;
+
+    let n_already_selected = selected.nrows();
+    let selected_structures_id = vec![-1; n_already_selected];
+    let points = concatenate!(Axis(0), selected, points);
+    let structures = concatenate!(Axis(0), selected_structures_id, structures);
 
     let initial = 0;
     let mut voronoi = VoronoiDecomposer::new(points.view(), initial);
     let mut radius_when_selected = Vec::new();
     radius_when_selected.push(*voronoi.cells().last().unwrap().radius2);
 
-    for point in structures.iter()
+    for i in 1..n_already_selected {
+        voronoi.add_point(i);
+        radius_when_selected.push(*voronoi.cells().last().unwrap().radius2);
+    }
+    let mut selected_structures = Vec::new();
+    if n_already_selected == 0 {
+        selected_structures.push(structures[initial]);
+        // add all environments from the first structure
+        for point in structures.iter()
         .enumerate()
         .filter_map(|(i, &s)| {
             if s == structures[initial] && i != initial {
@@ -70,8 +90,7 @@ environment in this structure is selected."
                 voronoi.add_point(point);
                 radius_when_selected.push(*voronoi.cells().last().unwrap().radius2);
             }
-
-    let mut selected_structures = vec![structures[initial]];
+    }
 
     for _ in 1..n_select {
         let selected_point = {
