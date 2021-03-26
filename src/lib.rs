@@ -23,5 +23,4 @@ pub fn find_max<'a, I: Iterator<Item=&'a f64>>(values: I) -> (usize, f64) {
 pub mod simple;
 
 pub mod voronoi;
-
-mod capi;
+pub use voronoi::VoronoiDecomposer;

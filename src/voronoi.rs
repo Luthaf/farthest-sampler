@@ -234,6 +234,12 @@ impl<'a> VoronoiDecomposer<'a> {
     pub fn cells(&self) -> VoronoiCellSlice {
         self.cells.as_slice()
     }
+
+    /// Get the potential next point, i.e. the point with highest Haussdorf distance
+    pub fn next_point(&self) -> (usize, f64) {
+        let (max_radius_cell, radius) = find_max(self.cells.radius2.iter());
+        return (self.cells.farthest[max_radius_cell], radius);
+    }
 }
 
 /// Select `n_select` points from `points` using Farthest Points Sampling, and

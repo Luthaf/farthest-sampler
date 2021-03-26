@@ -1,11 +1,11 @@
 [package]
-name = "voronoi_fps"
+name = "voronoi-fps"
 version = "0.1.0"
 authors = ["Luthaf <luthaf@luthaf.fr>"]
 edition = "2018"
 
-[lib]
-crate-type = ["rlib", "cdylib"]
+[workspace]
+members = ["voronoi-fps-python"]
 
 [[bench]]
 name = "bench"

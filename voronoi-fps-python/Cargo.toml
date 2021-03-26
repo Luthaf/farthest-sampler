@@ -1,0 +1,17 @@
+[package]
+name = "voronoi-fps-python"
+version = "0.1.0"
+authors = ["Luthaf <luthaf@luthaf.fr>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+voronoi-fps = {path = "../"}
+ndarray = "0.14"
+numpy = "0.13"
+
+[dependencies.pyo3]
+version = "0.13"
+features = ["extension-module"]
