@@ -7,6 +7,9 @@ edition = "2018"
 [workspace]
 members = ["farthest-sampler-python"]
 
+[lib]
+bench = false
+
 [[bench]]
 name = "bench"
 harness = false
