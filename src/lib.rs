@@ -1,10 +1,20 @@
 #![allow(clippy::needless_return, clippy::redundant_field_names)]
 
+#[cfg(features = "time-graph")]
 macro_rules! tracing_span {
     ($name: literal, $code: tt) => {
         {
             let span = tracing::info_span!($name);
             let _guard = span.enter();
+            $code
+        }
+    };
+}
+
+#[cfg(not(features = "time-graph"))]
+macro_rules! tracing_span {
+    ($name: literal, $code: tt) => {
+        {
             $code
         }
     };

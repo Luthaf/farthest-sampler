@@ -17,7 +17,7 @@ fn compute_haussdorf(
 /// Select `n_select` points from `points` using Farthest Points Sampling, and
 /// return the indexes of selected points. The first point (already selected) is
 /// the point at the `initial` index.
-#[tracing::instrument]
+#[cfg_attr(feature = "time-graph", time_graph::instrument)]
 pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) -> Vec<usize> {
     let n_points = points.nrows();
 

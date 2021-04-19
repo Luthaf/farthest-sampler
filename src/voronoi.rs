@@ -75,7 +75,7 @@ pub struct VoronoiDecomposer<'a> {
 }
 
 impl<'a> VoronoiDecomposer<'a> {
-    #[tracing::instrument(name = "initialize voronoi")]
+    #[cfg_attr(feature = "time-graph", time_graph::instrument(name = "initialize voronoi"))]
     pub fn new(points: ArrayView2<'a, f64>, initial: usize) -> VoronoiDecomposer<'a> {
         let norms = points.axis_iter(Axis(0))
             .map(|row| row.dot(&row))
@@ -109,7 +109,7 @@ impl<'a> VoronoiDecomposer<'a> {
     }
 
     /// Add a new selected point as the center of a Voronoï cell
-    #[tracing::instrument(name = "add new voronoi cell")]
+    #[cfg_attr(feature = "time-graph", time_graph::instrument(name = "add new voronoi cell"))]
     pub fn add_point(&mut self, new_point: usize) {
         self.work.clear();
 
@@ -245,7 +245,7 @@ impl<'a> VoronoiDecomposer<'a> {
 /// Select `n_select` points from `points` using Farthest Points Sampling, and
 /// return the indexes of selected points. The first point (already selected) is
 /// the point at the `initial` index.
-#[tracing::instrument]
+#[cfg_attr(feature = "time-graph", time_graph::instrument)]
 pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) -> Vec<usize> {
     let n_points = points.nrows();
 
