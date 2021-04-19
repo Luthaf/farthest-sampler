@@ -12,7 +12,7 @@ pub struct VoronoiDecomposer {
     /// This is inherently unsafe since we are tricking the rust compiler into
     /// thinking that the reference is a `'static` one when the array could
     /// actually be changed under us at any time.
-    decomposer: RefCell<voronoi_fps::VoronoiDecomposer<'static>>,
+    decomposer: RefCell<farthest_sampler::VoronoiDecomposer<'static>>,
 }
 
 #[pymethods]
@@ -26,7 +26,7 @@ impl VoronoiDecomposer {
         };
 
         VoronoiDecomposer {
-            decomposer: RefCell::new(voronoi_fps::VoronoiDecomposer::new(points, initial)),
+            decomposer: RefCell::new(farthest_sampler::VoronoiDecomposer::new(points, initial)),
         }
     }
 
@@ -51,19 +51,19 @@ impl VoronoiDecomposer {
 
 
 #[pymodule]
-fn voronoi_fps(_: Python, m: &PyModule) -> PyResult<()> {
+fn farthest_sampler(_: Python, m: &PyModule) -> PyResult<()> {
 
     #[pyfn(m, "select_fps_voronoi")]
     fn select_fps_voronoi<'py>(py: Python<'py>, points: &PyArray2<f64>, n_select: usize, initial: usize) -> &'py PyArray1<usize> {
         let points = points.readonly();
-        let selected = voronoi_fps::voronoi::select_fps(points.as_array(), n_select, initial);
+        let selected = farthest_sampler::voronoi::select_fps(points.as_array(), n_select, initial);
         return PyArray1::from_vec(py, selected);
     }
 
-    #[pyfn(m, "select_fps_simple")]
-    fn select_fps_simple<'py>(py: Python<'py>, points: &PyArray2<f64>, n_select: usize, initial: usize) -> &'py PyArray1<usize> {
+    #[pyfn(m, "select_fps_standard")]
+    fn select_fps_standard<'py>(py: Python<'py>, points: &PyArray2<f64>, n_select: usize, initial: usize) -> &'py PyArray1<usize> {
         let points = points.readonly();
-        let selected = voronoi_fps::simple::select_fps(points.as_array(), n_select, initial);
+        let selected = farthest_sampler::simple::select_fps(points.as_array(), n_select, initial);
         return PyArray1::from_vec(py, selected);
     }
 

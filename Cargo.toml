@@ -1,11 +1,11 @@
 [package]
-name = "voronoi-fps"
+name = "farthest-sampler"
 version = "0.1.0"
 authors = ["Luthaf <luthaf@luthaf.fr>"]
 edition = "2018"
 
 [workspace]
-members = ["voronoi-fps-python"]
+members = ["farthest-sampler-python"]
 
 [[bench]]
 name = "bench"
@@ -16,7 +16,6 @@ ndarray = {version = "0.14", features = ["rayon"]}
 soa_derive = "0.10"
 rayon = "1"
 thread_local = "1"
-once_cell = "1"
 time-graph = {version = "0.1.1", optional = true}
 
 [dev-dependencies]

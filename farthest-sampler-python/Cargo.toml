@@ -1,5 +1,5 @@
 [package]
-name = "voronoi-fps-python"
+name = "farthest-sampler-python"
 version = "0.1.0"
 authors = ["Luthaf <luthaf@luthaf.fr>"]
 edition = "2018"
@@ -8,7 +8,7 @@ edition = "2018"
 crate-type = ["cdylib"]
 
 [dependencies]
-voronoi-fps = {path = "../"}
+farthest-sampler = {path = "../"}
 ndarray = "0.14"
 numpy = "0.13"
 
