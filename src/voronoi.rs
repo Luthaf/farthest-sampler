@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use thread_local::ThreadLocal;
 
 use soa_derive::{StructOfArray, soa_zip};
-use ndarray::{Array1, ArrayView2, Axis, s};
+use ndarray::{Array1, ArrayView2, Axis, CowArray, Ix2, s};
 
 use super::find_max;
 
@@ -63,7 +63,7 @@ impl WorkArrays {
 #[derive(Debug)]
 pub struct VoronoiDecomposer<'a> {
     /// Input points
-    points: ArrayView2<'a, f64>,
+    points: CowArray<'a, f64, Ix2>,
     /// Current list of cells
     cells: VoronoiCellVec,
     /// Norm of the vector from origin for each points
@@ -76,7 +76,7 @@ pub struct VoronoiDecomposer<'a> {
 
 impl<'a> VoronoiDecomposer<'a> {
     #[cfg_attr(feature = "time-graph", time_graph::instrument(name = "initialize voronoi"))]
-    pub fn new(points: ArrayView2<'a, f64>, initial: usize) -> VoronoiDecomposer<'a> {
+    pub fn new(points: CowArray<'a, f64, Ix2>, initial: usize) -> VoronoiDecomposer<'a> {
         let norms = points.axis_iter(Axis(0))
             .map(|row| row.dot(&row))
             .collect::<Array1<f64>>();
@@ -253,7 +253,7 @@ pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) 
         panic!("can not select more points than what we have")
     }
 
-    let mut voronoi = VoronoiDecomposer::new(points, initial);
+    let mut voronoi = VoronoiDecomposer::new(points.into(), initial);
     voronoi.reserve(n_select - 1);
 
     for _ in 1..n_select {

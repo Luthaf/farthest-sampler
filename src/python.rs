@@ -2,14 +2,11 @@ use pyo3::prelude::*;
 
 use std::cell::RefCell;
 
-use ndarray::ArrayView2;
+use ndarray::Array2;
 use numpy::{PyArray1, PyArray2};
 
 #[pyclass]
 pub struct VoronoiDecomposer {
-    /// This is inherently unsafe since we are tricking the rust compiler into
-    /// thinking that the reference is a `'static` one when the array could
-    /// actually be changed under us at any time.
     decomposer: RefCell<crate::VoronoiDecomposer<'static>>,
 }
 
@@ -19,12 +16,10 @@ impl VoronoiDecomposer {
     fn new(points: &PyArray2<f64>, initial: usize) -> Self {
         let points = points.readonly();
 
-        let points: ArrayView2<'static, f64> = unsafe {
-            std::mem::transmute(points.as_array())
-        };
+        let points: Array2<f64> = points.as_array().to_owned();
 
         VoronoiDecomposer {
-            decomposer: RefCell::new(crate::VoronoiDecomposer::new(points, initial)),
+            decomposer: RefCell::new(crate::VoronoiDecomposer::new(points.into(), initial)),
         }
     }
 
