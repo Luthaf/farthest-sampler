@@ -5,13 +5,7 @@ Some code to perform FPS selections of features or samples.
 ## Installation
 
 ```bash
-pip install maturin  # build & packaging tool to create Python wheels
-
-git clone https://github.com/Luthaf/farthest-sampler
-cd farthest-sampler
-
-maturin build --release --manifest-path farthest-sampler-python/Cargo.toml
-pip install target/wheels/farthest_sampler_python-<YOUR-PYTHON-VERSION>.whl
+pip install git+https://github.com/Luthaf/farthest-sampler
 ```
 
 ## Example

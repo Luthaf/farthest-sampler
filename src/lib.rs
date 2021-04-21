@@ -34,3 +34,6 @@ pub mod simple;
 
 pub mod voronoi;
 pub use voronoi::VoronoiDecomposer;
+
+#[cfg(feature = "python")]
+mod python;

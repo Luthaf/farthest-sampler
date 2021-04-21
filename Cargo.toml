@@ -1,18 +1,19 @@
 [package]
-name = "farthest-sampler"
+name = "farthest_sampler"
 version = "0.1.0"
 authors = ["Luthaf <luthaf@luthaf.fr>"]
 edition = "2018"
 
-[workspace]
-members = ["farthest-sampler-python"]
-
 [lib]
 bench = false
+crate-type = ["rlib", "cdylib"]
 
 [[bench]]
 name = "bench"
 harness = false
+
+[features]
+python = ["pyo3", "numpy"]
 
 [dependencies]
 ndarray = {version = "0.14", features = ["rayon"]}
@@ -20,6 +21,12 @@ soa_derive = "0.10"
 rayon = "1"
 thread_local = "1"
 time-graph = {version = "0.1.1", optional = true}
+numpy = {version = "0.13", optional = true}
+
+[dependencies.pyo3]
+version = "0.13"
+features = ["extension-module"]
+optional = true
 
 [dev-dependencies]
 criterion = {version = "0.3", features = ["html_reports"]}
