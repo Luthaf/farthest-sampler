@@ -16,7 +16,7 @@ harness = false
 python = ["pyo3", "numpy"]
 
 [dependencies]
-ndarray = {version = "0.14", features = ["rayon"]}
+ndarray = {version = "0.15", features = ["rayon"]}
 soa_derive = "0.10"
 rayon = "1"
 thread_local = "1"
@@ -30,4 +30,4 @@ optional = true
 
 [dev-dependencies]
 criterion = {version = "0.3", features = ["html_reports"]}
-ndarray-npy = "0.7"
+ndarray-npy = "0.8"
