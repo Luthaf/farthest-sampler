@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 
 use std::cell::RefCell;
 
-use ndarray::Array2;
+use ndarray::ArrayView2;
 use numpy::{PyArray1, PyArray2};
 
 #[pyclass]
@@ -16,7 +16,12 @@ impl VoronoiDecomposer {
     fn new(points: &PyArray2<f64>, initial: usize) -> Self {
         let points = points.readonly();
 
-        let points: Array2<f64> = points.as_array().to_owned();
+        let points: ArrayView2<f64> = points.as_array();
+
+        // SAFETY: nothing, but we REALLY don't want to make a copy of this data
+        let points: ArrayView2<'static, f64> = unsafe {
+            std::mem::transmute(points)
+        };
 
         VoronoiDecomposer {
             decomposer: RefCell::new(crate::VoronoiDecomposer::new(points.into(), initial)),
