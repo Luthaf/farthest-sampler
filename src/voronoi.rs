@@ -257,15 +257,7 @@ pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) 
     voronoi.reserve(n_select - 1);
 
     for _ in 1..n_select {
-        // Find the maximum minimum (maxmin) distance and the corresponding
-        // point. The maxmin point must be one of the farthest points from the
-        // Voronoï decomposition, so we only have to look at the list of
-        // existing cells to find it.
-        let new_point = {
-            let cells = voronoi.cells();
-            let (max_radius_cell, _) = find_max(cells.radius2.iter());
-            cells.farthest[max_radius_cell]
-        };
+        let (new_point, _) = voronoi.next_point();
         voronoi.add_point(new_point);
     }
 

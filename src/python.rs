@@ -47,6 +47,40 @@ impl VoronoiDecomposer {
     }
 }
 
+#[pyclass]
+pub struct FpsSelector {
+    selector: RefCell<crate::FpsSelector<'static>>,
+}
+
+#[pymethods]
+impl FpsSelector {
+    #[new]
+    fn new(points: &PyArray2<f64>, initial: usize) -> Self {
+        let points = points.readonly();
+
+        let points: ArrayView2<f64> = points.as_array();
+
+        // SAFETY: nothing, but we REALLY don't want to make a copy of this data
+        let points: ArrayView2<'static, f64> = unsafe {
+            std::mem::transmute(points)
+        };
+
+        FpsSelector {
+            selector: RefCell::new(crate::FpsSelector::new(points.into(), initial)),
+        }
+    }
+
+    fn add_point(&self, new_point: usize) {
+        let mut selector = self.selector.borrow_mut();
+        selector.add_point(new_point);
+    }
+
+    fn next_point(&self) -> (usize, f64) {
+        let selector = self.selector.borrow();
+        return selector.next_point();
+    }
+}
+
 
 #[pymodule]
 fn farthest_sampler(_: Python, m: &PyModule) -> PyResult<()> {
@@ -66,5 +100,6 @@ fn farthest_sampler(_: Python, m: &PyModule) -> PyResult<()> {
     }
 
     m.add_class::<VoronoiDecomposer>()?;
+    m.add_class::<FpsSelector>()?;
     Ok(())
 }
