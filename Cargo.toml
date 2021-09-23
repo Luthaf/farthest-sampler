@@ -1,6 +1,6 @@
 [package]
 name = "farthest_sampler"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Luthaf <luthaf@luthaf.fr>"]
 edition = "2018"
 
@@ -13,14 +13,14 @@ name = "bench"
 harness = false
 
 [features]
-python = ["pyo3", "numpy"]
+python = ["pyo3", "numpy", "time-graph"]
 
 [dependencies]
 ndarray = {version = "0.15", features = ["rayon"]}
 soa_derive = "0.10"
 rayon = "1"
 thread_local = "1"
-time-graph = {version = "0.1.1", optional = true}
+time-graph = {version = "0.1.3", optional = true, features = ["table"]}
 numpy = {version = "0.13", optional = true}
 
 [dependencies.pyo3]

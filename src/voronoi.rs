@@ -75,7 +75,7 @@ pub struct VoronoiDecomposer<'a> {
 }
 
 impl<'a> VoronoiDecomposer<'a> {
-    #[cfg_attr(feature = "time-graph", time_graph::instrument(name = "initialize voronoi"))]
+    #[cfg_attr(feature = "time-graph", time_graph::instrument(name = "VoronoiDecomposer::new"))]
     pub fn new(points: CowArray<'a, f64, Ix2>, initial: usize) -> VoronoiDecomposer<'a> {
         let norms = points.axis_iter(Axis(0))
             .map(|row| row.dot(&row))
@@ -109,7 +109,7 @@ impl<'a> VoronoiDecomposer<'a> {
     }
 
     /// Add a new selected point as the center of a Voronoï cell
-    #[cfg_attr(feature = "time-graph", time_graph::instrument(name = "add new voronoi cell"))]
+    #[cfg_attr(feature = "time-graph", time_graph::instrument(name = "VoronoiDecomposer::add_point"))]
     pub fn add_point(&mut self, new_point: usize) {
         self.work.clear();
 
@@ -236,6 +236,7 @@ impl<'a> VoronoiDecomposer<'a> {
     }
 
     /// Get the potential next point, i.e. the point with highest Haussdorf distance
+    #[cfg_attr(feature = "time-graph", time_graph::instrument(name = "VoronoiDecomposer::next_point"))]
     pub fn next_point(&self) -> (usize, f64) {
         let (max_radius_cell, radius) = find_max(self.cells.radius2.iter());
         return (self.cells.farthest[max_radius_cell], radius);

@@ -1,3 +1,5 @@
+#![allow(clippy::needless_lifetimes)]
+
 use pyo3::prelude::*;
 
 use std::cell::RefCell;
@@ -97,6 +99,18 @@ fn farthest_sampler(_: Python, m: &PyModule) -> PyResult<()> {
         let points = points.readonly();
         let selected = crate::simple::select_fps(points.as_array(), n_select, initial);
         return PyArray1::from_vec(py, selected);
+    }
+
+    time_graph::enable_data_collection(true);
+
+    #[pyfn(m, "clear_profiling")]
+    fn clear_profiling<'py>(_py: Python<'py>) {
+        time_graph::clear_collected_data();
+    }
+
+    #[pyfn(m, "get_profiling")]
+    fn get_profiling<'py>(_py: Python<'py>) -> String {
+        time_graph::get_full_graph().as_short_table()
     }
 
     m.add_class::<VoronoiDecomposer>()?;

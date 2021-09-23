@@ -1,24 +1,22 @@
 #![allow(clippy::needless_return, clippy::redundant_field_names)]
 
-#[cfg(features = "time-graph")]
+// #[cfg(features = "time-graph")]
 macro_rules! tracing_span {
     ($name: literal, $code: tt) => {
-        {
-            let span = tracing::info_span!($name);
-            let _guard = span.enter();
+        time_graph::spanned!($name, {
             $code
-        }
+        })
     };
 }
 
-#[cfg(not(features = "time-graph"))]
-macro_rules! tracing_span {
-    ($name: literal, $code: tt) => {
-        {
-            $code
-        }
-    };
-}
+// #[cfg(not(features = "time-graph"))]
+// macro_rules! tracing_span {
+//     ($name: literal, $code: tt) => {
+//         {
+//             $code
+//         }
+//     };
+// }
 
 /// Get both the maximal value in `values` and the position of this maximal
 /// value

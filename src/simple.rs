@@ -42,6 +42,7 @@ impl<'a> FpsSelector<'a> {
     }
 
     /// Add a new selected point as the center of a Voronoï cell
+    #[cfg_attr(feature = "time-graph", time_graph::instrument(name = "FpsSelector::add_point"))]
     pub fn add_point(&mut self, new_point: usize) {
         assert!(new_point < self.points.nrows());
         self.indexes.push(new_point);
@@ -56,10 +57,12 @@ impl<'a> FpsSelector<'a> {
     }
 
     /// Get the potential next point, i.e. the point with highest Haussdorf distance
+    #[cfg_attr(feature = "time-graph", time_graph::instrument(name = "FpsSelector::next_point"))]
     pub fn next_point(&self) -> (usize, f64) {
         return find_max(self.haussdorf.iter());
     }
 
+    #[cfg_attr(feature = "time-graph", time_graph::instrument(name = "FpsSelector::compute_haussdorf"))]
     fn compute_haussdorf(&mut self, current: usize) {
         let point = self.points.slice(s![current, ..]);
         let output = &mut self.new_distances;
