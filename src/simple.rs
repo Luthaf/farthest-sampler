@@ -34,19 +34,28 @@ pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) 
 
     let mut haussdorf = Array1::from_elem([n_points], 0.0);
     compute_haussdorf(points, norms.view(), initial, haussdorf.view_mut());
+    let (_, initial_max_value) = find_max(haussdorf.iter());
     let mut new_distances = Array1::from_elem([n_points], 0.0);
 
-    for _ in 1..n_select {
-        let (new, _) = find_max(haussdorf.iter());
+    for i in 1..n_select {
+        let (new, max_value) = find_max(haussdorf.iter());
+        if max_value / initial_max_value < 1e-12 {
+            panic!(
+                "unable to select more than {} points, all remaining \
+                points are identical to already selected points",
+                i
+            );
+        }
+
         fps_indexes.push(new);
 
         compute_haussdorf(points, norms.view(), new, new_distances.view_mut());
 
-        for (d, &new_d) in haussdorf.iter_mut().zip(&new_distances) {
+        par_azip!((d in &mut haussdorf, &new_d in &new_distances) {
             if new_d < *d {
                 *d = new_d;
-            };
-        }
+            }
+        });
     }
 
     return fps_indexes;

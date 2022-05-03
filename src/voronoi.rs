@@ -70,6 +70,8 @@ pub struct VoronoiDecomposer<'a> {
     norms: Vec<f64>,
     /// Shortest distance for each point to already selected points
     haussdorf: Vec<f64>,
+    /// haussdorf distance of the first point
+    initial_max_haussdorf: f64,
     /// Cached allocations when adding new points
     work: WorkArrays,
 }
@@ -98,6 +100,7 @@ impl<'a> VoronoiDecomposer<'a> {
             cells: cells,
             norms: norms.to_vec(),
             haussdorf: haussdorf.to_vec(),
+            initial_max_haussdorf: radius2,
             work: WorkArrays::new(),
         }
     }
@@ -237,8 +240,17 @@ impl<'a> VoronoiDecomposer<'a> {
 
     /// Get the potential next point, i.e. the point with highest Haussdorf distance
     pub fn next_point(&self) -> (usize, f64) {
-        let (max_radius_cell, radius) = find_max(self.cells.radius2.iter());
-        return (self.cells.farthest[max_radius_cell], radius);
+        let (max_radius_cell, radius2) = find_max(self.cells.radius2.iter());
+
+        if radius2 / self.initial_max_haussdorf < 1e-12 {
+            panic!(
+                "unable to select more than {} points, all remaining \
+                points are identical to already selected points",
+                self.cells.len()
+            );
+        }
+
+        return (self.cells.farthest[max_radius_cell], radius2);
     }
 }
 
@@ -263,7 +275,16 @@ pub fn select_fps(points: ArrayView2<'_, f64>, n_select: usize, initial: usize) 
         // existing cells to find it.
         let new_point = {
             let cells = voronoi.cells();
-            let (max_radius_cell, _) = find_max(cells.radius2.iter());
+            let (max_radius_cell, radius2) = find_max(cells.radius2.iter());
+
+            if radius2 / voronoi.initial_max_haussdorf < 1e-12 {
+                panic!(
+                    "unable to select more than {} points, all remaining \
+                    points are identical to already selected points",
+                    voronoi.cells.len()
+                );
+            }
+
             cells.farthest[max_radius_cell]
         };
         voronoi.add_point(new_point);
